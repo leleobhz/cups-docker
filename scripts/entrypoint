@@ -1,0 +1,126 @@
+#!/bin/bash
+# The MIT License (MIT)
+#
+# Copyright (c) 2007-2024 Infra7 Serviços em TI.
+#
+# Permission is hereby granted, free  of  charge,  to  any  person  obtaining  a
+# copy of this software and associated  documentation  files  (the  "Software"),
+# to deal in the Software  without  restriction,  including  without  limitation
+# the rights to use,  copy,  modify,  merge,  publish,  distribute,  sublicense,
+# and/or sell copies of  the  Software,  and  to  permit  persons  to  whom  the
+# Software  is  furnished  to  do  so,  subject  to  the  following  conditions:
+#
+# The above copyright notice and this permission notice  shall  be  included  in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS  IS",  WITHOUT  WARRANTY  OF  ANY  KIND,  EXPRESS
+# OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE  WARRANTIES  OF  MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT  SHALL  THE
+# AUTHORS OR COPYRIGHT HOLDERS  BE  LIABLE  FOR  ANY  CLAIM,  DAMAGES  OR  OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING  FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN  THE
+# SOFTWARE.
+
+export LC_ALL=C
+export PATH=/usr/local/sbin:/usr/local/bin:${PATH}
+
+set -eu
+exec 3>/dev/stdout
+
+# -- Functions -----------------------------------------------------------------
+
+__failure () { printf >&2 "\e[0;31mERROR:\e[0;38m ${*}"; }
+__success () { printf >&1 "\e[0;32mDONE:\e[0;38m ${*}"; }
+__warning () { printf >&1 "\e[0;33mWARN:\e[0;38m ${*}"; }
+__notice () { printf >&1 "\e[0;34mNOTICE:\e[0;38m ${*}"; }
+__debug () { printf >&1 "\e[0;35mDEBUG:\e[0;38m ${*}"; }
+__info () { printf >&1 "\e[0;34mINFO:\e[0;38m ${*:1}"; }
+
+abort () {
+    errno=${?}
+    echo
+    __failure $"An error occurred (code: ${errno}).\n"
+    __info $"Press CTRL+C to exit build now.\n"
+    sleep 10 && __failure $"Exiting this build.\n" && exit ${errno}
+}
+
+# finds and runs the executable shell-scripts in entrypoint directory
+_run_scripts() {
+    local _dir=/etc/entrypoint.d
+    local _files="find ${_dir} -mindepth 1 -maxdepth 1 -type f -print -quit"
+
+    if $(${_files} 2>/dev/null | read v); then
+        find -L ${_dir} -type f -print | sort -V | \
+          while read -r _script; do
+              if head -1 ${_script} | egrep -sq '^#\!.*/[ba]*sh'; then
+                  if [ -x "${_script}" ]; then
+                      __info $(printf $"Launching shell-script: '%s'\n" "${_script}")
+                      "${_script}"
+                  else
+                      __warn $(printf $"Ignoring non-executable script:' %s'\n" "${_script}")
+                  fi
+              else
+	          __warn $(printf $"Ignoring non shell-script: '%s'\n" "${_script}")
+              fi
+          done
+    fi
+}
+
+_run() {
+    local cmd=${@:-}
+
+    # Validate cmd passed for security
+    prog=$(which $(basename ${cmd//\ *}) 2>/dev/null)
+    test -z ${prog} && abort $? "Command not found: '${cmd//\ *}'. Exiting."
+    test -x ${prog} || abort $? "Not executable: '${prog}'. Exiting."
+
+    dbg_msg=
+    if [ ${DEBUG:-0} -gt 0 ]; then
+        dbg_msg="\nDEBUG: Command was terminated: ${cmd} (exit code=$?)"
+    fi
+    precmd="trap 'kill -0 $$; /bin/echo -ne ${dbg_msg}' EXIT"
+    exec -- /bin/sh -c "${precmd}; ${cmd}"
+}
+
+# -- Main ----------------------------------------------------------------------
+
+# Default variables values
+: ${CUPSADMIN:="admin"}
+: ${CUPSPASSWD:="__cUPsPassw0rd__"}
+: ${CUPSADMINFILE:="/run/secrets/cups_admin"}
+: ${CUPSPASSWORDFILE:="/run/secrets/cups_password"}
+: ${CUPSERRORLOG:="/dev/stderr"}
+: ${TZ:="Etc/UTC"}
+
+# Load secrets
+test -f ${CUPSADMINFILE} && CUPSADMIN=$(< ${CUPSADMINFILE})
+test -f ${CUPSPASSWORDFILE} && CUPSPASSWORD=$(< ${CUPSPASSWORDFILE})
+
+if ! id -u ${CUPSADMIN} &>/dev/null; then
+    # Create user and password
+    useradd -r -G lpadmin -M ${CUPSADMIN} && \
+        echo ${CUPSADMIN}:${CUPSPASSWORD} | chpasswd
+fi
+
+# Restore default cups config in case user does not have any
+if [ ! -f /etc/cups/cupsd.conf ]; then
+    cp -rpn /etc/cups~/* /etc/cups/
+fi
+
+# Set the error log
+sed -i "s|^ErrorLog.*|ErrorLog ${CUPSERRORLOG}|g" /etc/cups/cups-files.conf
+
+# The default CMD for this entrypoint is bash
+CMD=${@:-bash}
+
+case "${CMD}" in
+    *[abkz]sh)
+	__info $(printf $"Starting the fallback shell: '%s' ...\n" "${CMD}")
+        _run "${CMD}"
+    ;;
+    *)
+        _run_scripts
+	__info $(printf $"Starting command: '%s' ...\n" "${CMD}")
+        _run "${CMD}"
+    ;;
+esac

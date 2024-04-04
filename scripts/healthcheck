@@ -1,0 +1,6 @@
+#!/bin/sh
+
+wget -nv -t1 \
+  --spider http://localhost:631/printers/ \
+  || exit 1 \
+  && exit 0
