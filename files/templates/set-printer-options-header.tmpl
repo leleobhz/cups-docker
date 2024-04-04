@@ -1,0 +1,21 @@
+<h2 >Set Default Options for {printer_name}</h2>
+
+<form method="POST" action="/admin">
+<input type="HIDDEN" name="org.cups.sid" value="{$org.cups.sid}">
+<input type="HIDDEN" name="PRINTER_NAME" value="{printer_name}">
+<input type="HIDDEN" name="OP" value="{op}">
+{HAVE_AUTOCONFIGURE?<input type="SUBMIT" name="AUTOCONFIGURE" value="Query Printer for Default Options">:}
+
+<script type="text/javascript">
+function update_paramtable(option)
+{
+  var cb = document.getElementById("select-" + option)
+  var paramstable = document.getElementById(option + "-params");
+  if (cb.value == "Custom")
+    paramstable.style.display = "table";
+  else
+    paramstable.style.display = "none";
+}
+</script>
+
+<h3>{[group_id]</h3>
